@@ -1,6 +1,9 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module PathOfExile.Parsing.Dat (
   pDatText
+, MetaSize(..)
+, Record(..)
 ) where
 
 import Data.Serialize.Get
@@ -16,12 +19,14 @@ import Blaze.ByteString.Builder (toByteString)
 import Blaze.ByteString.Builder.Word (fromWord16shost)
 import Debug.Trace (trace)
 
-data Record a = Record { recOffset  :: !Word32
-                       , recSmallId :: !Word32
-                       , recUnk1    :: !Word32
-                       , recBigId   :: !Word32
-                       , recData    :: a
+data Record a = Record { recMetaData :: ByteString
+                       , recData     :: a
                        } deriving (Show)
+
+newtype MetaSize = MetaSize { getMetaSize :: Int }
+                 deriving (Show, Eq, Ord, Num)
+
+type DatState = ()
 
 w32 :: Get Word32
 w32 = getWord32host
@@ -44,28 +49,23 @@ pBSRecord = do
   skip 4
   return $ toByteString $ fromWord16shost words
 
-pMetaRecord :: Get (a -> Record a)
-pMetaRecord = Record <$> w32 <*> w32 <*> w32 <*> w32
+pMetaRecord :: MetaSize -> Get (a -> Record a)
+pMetaRecord (MetaSize n) = Record <$> getByteString n
 
-pDatByteStrings :: Get [Record ByteString]
-pDatByteStrings = pDat pBSRecord
+pDatFromBS :: MetaSize -> (ByteString -> a) -> Get [Record a]
+pDatFromBS n f = pDat (f <$> pBSRecord) n
 
-pDatFromBS :: (ByteString -> a) -> Get [Record a]
-pDatFromBS f = pDat (f <$> pBSRecord)
+pDatText :: MetaSize -> Get [Record Text]
+pDatText n = pDatFromBS n decodeUtf16LE
 
-pDatText :: Get [Record Text]
-pDatText = pDatFromBS decodeUtf16LE
-
-pDat :: Get a -> Get [Record a]
-pDat p = do
+pDat :: Get a -> MetaSize -> Get [Record a]
+pDat p mrsize = do
   n   <- w32
-  mrs <- replicateM (fromIntegral n) pMetaRecord
+  mrs <- replicateM (fromIntegral n) (pMetaRecord mrsize)
   skip 8
   mapM go mrs
   where
     go x = do
       rec <- p 
       return $ x rec
-
-    
 
